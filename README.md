@@ -101,7 +101,7 @@ git clone git@github.com:SoundaryaA3098/Deployment-yamls.git
 
 #### SETUP THE CLUSTER AND VM
 
-#####SETTING UP AZURE CLI
+##### SETTING UP AZURE CLI
 
 ```
 sudo apt-get update
@@ -143,23 +143,23 @@ Mark the name of the new container created for subsequent usage.
 cd blockchain-platform
 code cloudplatform
 Example Configuration:
-# Resource Group
+#### Resource Group
 resource_group = "umb-rg"
 location = "West US 2"
 
-# Storage Account Name" 
+#### Storage Account Name" 
 storage_account_name = "umbstorageaccount"
 
-# Blobstore configuration
+#### Blobstore configuration
 blobstore_name = "umb-staging-cni-backup"
 
-# Azure AKS configuration
+#### Azure AKS configuration
 cluster_name = "umb-staging-cni"
 cluster_nodepool_name = "nodepool1"
 cluster_vmsize = "Standard_D4a_v4"
 cluster_nodepool_size = 3
 
-#Vault VM Configuration
+#### Vault VM Configuration
 prefix = "umb-vault"
 vault_vmsize = "Standard_DS1_v2"
 
@@ -245,14 +245,140 @@ The above command gives a IP . Note it down.
 Execute the below commands in your terminal.
 ```
 export VAULT_ADDR='http://DNS_Name:8200' //DROPLET IP
+
 vault operator init -key-shares=1 -key-threshold=1
+
 vault login root-token
+
 export VAULT_TOKEN="<Your Vault root token>"
+
 vault operator unseal
+
 vault secrets enable -version=1 -path=secret kv
+
 vault status
+
 vault secrets list
 ```
+
+UPDATE THE NETWORK CONFIGURATION FILE WITH THE VAULT DETAILS
+
+#### BAF SETUP
+
+```
+cd baf-intain-fork
+
+git checkout -b <branch-name> v0.7.0.0
+```
+
+- CREATE A NEW DIRECTORY CALLED     build
+
+```
+cd baf-intain-fork
+
+mkdir build
+
+cd build
+
+cd ../platforms/hyperledger-fabric/configuration/samples/
+```
+
+- COPY THE network-fabricv2.yaml FILE IN YOUR BUILD DIRECTORY AND RENAME IT AS network.yaml
+
+- INSIDE THE build DIRECTORY , YOU HAVE TO PLACE 4 FILES.
+        * network.yaml, * gitops (private key), * gitops.pub (public key), 
+config ( Paste the cluster configuration here )
+[Gitops and gitops.pub can be found in .ssh folder]
+
+- UPDATE THE CLOUD PROVIDER, k8s , VAULT SECTION, GITOPS
+
+Make the changes in the following 5 files 
+
+1) baf-intain-fork/platforms/hyperledger-fabric/configuration/roles/create/storageclass/templates/azurepeer_sc.tpl (change the storageaccounttype from Premium_LRS to Standard_LRS)
+2) baf-intain-fork/platforms/hyperledger-fabric/configuration/roles/create/storageclass/templates/azureorderer_sc.tpl (change the storageaccounttype from Premium_LRS to Standard_LRS)
+3) baf-intain-fork/platforms/hyperledger-fabric/configuration/roles/helm_component/templates/orderernode.tpl (change the storagesize to the required configuration)
+4) baf-intain-fork/platforms/hyperledger-fabric/configuration/roles/helm_component/templates/value_peer.tpl (change the storagesize to the required configuration)
+5) baf-intain-fork/platforms/hyperledger-fabric/configuration/roles/create/configtx/templates/configtxinit.tpl (Make LifecycleEndorsement and Endorsement from MAJORITY to ANY)
+
+ Prepare the k8s cluster
+
+ Change the branch name, vault configuration, cluster-context in the network.yaml
+
+Update the DNS
+
+ Once everything is done, run 
+
+docker run -it -v $(pwd):/home/blockchain-automation-framework/ hyperledgerlabs/baf-build bash
+
+ From blockchain-automation-framework dir, run ansible-playbook -v platforms/shared/configuration/site.yaml  -e "@./build/network.yaml"  -e 'ansible_python_interpreter=/usr/bin/python3'
+
+Create the cluster cheat sheet or Azure Cluster Details XL sheet and update
+
+kubectl get ingress --all-namespaces
+kubectl get service -n ingress-controller
+
+#### DEPLOYING INTAIN COMPONENTS
+
+Steps to be followed to deploy intain node app components:
+
+1) Create a namespace called “fabricclient”
+kubectl create namespace fabricclient
+
+2) Create a fileshare in azure in the required storage account.
+
+3) Create a secret named “azure-secret” by executing the create_secret_fileshare.sh script attached in the mail. Make sure you have entered the correct resource group, storage account and storage account keys in the script before you run.
+//Refer umb google drive
+
+```
+STORAGE_KEY=$(az storage account keys list --resource-group <resource_group_name> --account-name <storage_account_name> --query "[0].value" -o tsv)
+
+kubectl -n <namespace> create secret generic azure-secret --from-literal=azurestorageaccountname=<storage_account_name> --from-literal=azurestorageaccountkey=<key>
+
+```
+Create a file named create_secret_fileshare.sh and paste the above contents and update the details
+
+4) Deploy mongodb using the following command,
+
+helm install mongodb --set mongodbRootPassword=password,mongodbPassword=password stable/mongodb -n fabricclient
+Once the mongodb pod started running, deploy the node internal app.
+
+5) Create a secret “regcred” which will have our private docker registry credentials. Command to create the secret,
+
+kubectl create secret docker-registry regcred  --docker-username=intainregistry --docker-password=7ddf9dbc-ee73-43cc-b77b-2d30809b3d4a --docker-email=sivaram.kannan@intainft.com -n fabricclient
+
+6) Create storageclasses ( with azuredisk provisioner) using the shared azuredisk-sc.yaml 
+
+allowVolumeExpansion: true
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: fabricclient-disksc
+parameters:
+  kind: Managed
+  storageaccounttype: Standard_LRS
+provisioner: kubernetes.io/azure-disk
+reclaimPolicy: Retain
+volumeBindingMode: Immediate
+
+7) For internal app, we’ll be using azurefile as underlying storage. To deploy node internal app, create a pv with the created fileshare and create a pvc, deployment, service using the yaml files shared in the github repo
+
+8) For external app, we’ll be using the disk as underlying storage. To deploy node external app, create a pvc, deployment and service using the yaml files in the shared github repo.
+
+9) For ui, we’ll be using the disk as underlying storage. To deploy ui, create a pvc, deployment and service using the yaml files in the shared github repo.
+
+10) Ingress has to be created for UI (Mandatory) and internal app (if needed). Before creating the ingress, install cert-manager and cluster-issuer in your cluster using the deployment yamls shared in the same github repo.
+
+cd baf-intain-fork/platforms/hyperledger-fabric/configuration/build/
+kubectl cp crypto-config/ <node-internal-app-pod>:/mnt/fabric -n fabricclient
+
+To all the cli pods
+kubectl cp crypto-config/ <pod name>:/etc/hyperledger/fabric -n fabricclient
+
+
+ 
+
+
+
 
 
 
