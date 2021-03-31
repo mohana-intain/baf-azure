@@ -270,6 +270,7 @@ cd baf-intain-fork
 
 git checkout -b <branch-name> v0.7.0.0
 ```
+- Create a directory with the same name as the newly created branch under the path “platforms/hyperledger-fabric/releases”.
 
 - CREATE A NEW DIRECTORY CALLED     build
 
@@ -288,7 +289,10 @@ cd ../platforms/hyperledger-fabric/configuration/samples/
 - INSIDE THE build DIRECTORY , YOU HAVE TO PLACE 4 FILES.
         * network.yaml, * gitops (private key), * gitops.pub (public key), 
 config ( Paste the cluster configuration here )
-[Gitops and gitops.pub can be found in .ssh folder]
+
+Copy .ssh/gitops, ..sh/gitops.pub, .kube/config files under the build folder. Make sure the gitops.pub key is added to the git repository where the baf is going to push the files during network deployment.
+
+
 
 - UPDATE THE CLOUD PROVIDER, k8s , VAULT SECTION, GITOPS
 
@@ -305,6 +309,437 @@ Make the changes in the following 5 files
  Change the branch name, vault configuration, cluster-context in the network.yaml
 
 Update the DNS
+
+UPDATE THE network.yaml 
+
+### FOR EXAMPLE
+
+~~---
+# This is a sample configuration file for SupplyChain App which has 5 nodes.
+network:
+  # Network level configuration specifies the attributes required for each organization
+  # to join an existing network.
+  type: fabric
+  version: 2.2.0                 # currently tested 1.4.0 and 1.4.4
+
+  frontend: disabled #Flag for frontend to enabled for nodes/peers
+  
+  #Environment section for Kubernetes setup
+  env:
+    type: "dev"              # tag for the environment. Important to run multiple flux on single cluster
+    proxy: haproxy                  # values can be 'haproxy' or 'ambassador'
+    ambassadorPorts: 15010,15020    # Any additional Ambassador ports can be given here, must be comma-separated without spaces, this is valid only if proxy='ambassador'
+    retry_count: 20                 # Retry count for the checks
+    external_dns: disabled           # Should be enabled if using external-dns for automatic route configuration
+
+  # Docker registry details where images are stored. This will be used to create k8s secrets
+  # Please ensure all required images are built and stored in this registry.
+  # Do not check-in docker_password.
+  docker:
+    url: "index.docker.io/hyperledgerlabs"
+    username: "docker_username"
+    password: "docker_password"
+  
+  # Remote connection information for orderer (will be blank or removed for orderer hosting organization)
+  # For RAFT consensus, have odd number (2n+1) of orderers for consensus agreement to have a majority.
+  orderers:
+    - orderer:
+      type: orderer
+      name: orderer1
+      org_name: intain  #org_name should match one organization definition below in organizations: key            
+      uri: orderer1.intain-net:7050   # Can be external or internal URI for orderer which should be reachable by all peers
+      certificate: /home/blockchain-automation-framework/build/orderer1.crt           # Ensure that the directory exists
+
+  
+  # The channels defined for a network with participating peers in each channel
+  channels:
+  - channel:
+    consortium: UMBConsortium
+    channel_name: UmbChannel
+    orderer: 
+      name: intain
+    participants:
+    - organization:
+      name: trustee
+      type: creator       # creator organization will create the channel and instantiate chaincode, in addition to joining the channel and install chaincode
+      org_status: new
+      peers:
+      - peer:
+        name: peer0
+        gossipAddress: peer0.trustee-net:7051 # External or internal URI of the gossip peer
+        peerAddress: peer0.trustee-net:7051
+      ordererAddress: orderer1.intain-net:7050             # External or internal URI of the orderer
+    - organization:      
+      name: investor
+      type: joiner        # joiner organization will only join the channel and install chaincode
+      org_status: new
+      peers:
+      - peer:
+        name: peer0
+        gossipAddress: peer0.investor-net:7051
+        peerAddress: peer0.investor-net:7051
+      ordererAddress: orderer1.intain-net:7050
+    - organization:      
+      name: servicer
+      type: joiner        # joiner organization will only join the channel and install chaincode
+      org_status: new
+      peers:
+      - peer:
+        name: peer0
+        gossipAddress: peer0.servicer-net:7051
+        peerAddress: peer0.servicer-net:7051
+      ordererAddress: orderer1.intain-net:7050
+    endorsers:
+      name:
+      - trustee
+      - investor
+      - servicer
+      corepeerAddress:
+      - peer0.trustee-net:7051
+      - peer0.investor-net:7051
+      - peer0.servicer-net:7051
+    genesis:
+      name: OrdererGenesis
+
+  
+  # Allows specification of one or many organizations that will be connecting to a network.
+  # If an organization is also hosting the root of the network (e.g. doorman, membership service, etc),
+  # then these services should be listed in this section as well.
+  organizations:
+
+    # Specification for the 1st organization. Each organization maps to a VPC and a separate k8s cluster
+    - organization:
+      name: intain
+      country: UK
+      state: London
+      location: London
+      subject: "O=Orderer,L=51.50/-0.13/London,C=GB"
+      type: orderer
+      external_url_suffix: intain-net.umbdev.intainabs.com
+      org_status: new
+      cli: enabled
+      ca_data:
+        url: ca.intain-net:7054
+        certificate: file/server.crt        # This has not been implemented in 0.2.0.0
+  
+      cloud_provider: azure   # Options: aws, azure, gcp, minikube
+      aws:
+        access_key: "aws_access_key"        # AWS Access key, only used when cloud_provider=aws
+        secret_key: "aws_secret_key"        # AWS Secret key, only used when cloud_provider=aws
+  
+      # Kubernetes cluster deployment variables. The config file path and name has to be provided in case
+      # the cluster has already been created.
+      k8s:
+        region: "West US 2"
+        context: "umb-staging-cni"
+        config_file: "/home/blockchain-automation-framework/build/config"
+
+      # Hashicorp Vault server address and root-token. Vault should be unsealed.
+      # Do not check-in root_token
+      vault:
+        url: "http://umb-vault.westus2.cloudapp.azure.com:8200"
+        root_token: "s.GKqdVOujk3sv2tN12UUCUmy1"
+      # Git Repo details which will be used by GitOps/Flux.
+      # Do not check-in git_access_token
+      gitops:
+        git_ssh: "git@github.com:sivaramkannan/baf-intain-fork.git"         # Gitops ssh url for flux value files 
+        branch: "umb-staging-cni"           # Git branch where release is being made
+        release_dir: "platforms/hyperledger-fabric/releases/umb-staging-cni" # Relative Path in the Git repo for flux sync per environment. 
+        chart_source: "platforms/hyperledger-fabric/charts"     # Relative Path where the Helm charts are stored in Git repo
+        git_push_url: "github.com/sivaramkannan/baf-intain-fork.git"   # Gitops https URL for git push  (without https://)
+        username: "sivaramkannan"          # Git Service user who has rights to check-in in all branches
+        password: "ea8e98364360d504d7e78f8be06bf2b4c1955eb2"          # Git Server user password
+        email: "sivaram.kannan@intainft.com"                # Email to use in git config
+        private_key: "/home/blockchain-automation-framework/build/gitops"          # Path to private key file which has write-access to the git repo
+     
+      # Services maps to the pods that will be deployed on the k8s cluster
+      # This sample is an orderer service and includes a zk-kafka consensus
+      services:
+        ca:
+          name: ca
+          subject: "/C=GB/ST=London/L=London/O=Orderer/CN=ca.intain-net"
+          type: ca
+          grpc:
+            port: 7054
+        
+        consensus:
+          name: raft
+          type: broker        #This field is not consumed for raft consensus
+          replicas: 4         #This field is not consumed for raft consensus
+          grpc:
+            port: 9092        #This field is not consumed for raft consensus
+                
+        orderers:
+        # This sample has multiple orderers as an example.
+        # You can use a single orderer for most production implementations.
+        # For RAFT consensus, have odd number (2n+1) of orderers for consensus agreement to have a majority.
+        - orderer:
+          name: orderer1
+          type: orderer
+          consensus: raft
+          grpc:
+            port: 7050   
+        
+    - organization:
+      name: trustee
+      country: GB
+      state: London
+      location: London
+      subject: "O=Trustee,OU=Trustee,L=51.50/-0.13/London,C=GB"
+      type: peer
+      external_url_suffix: trustee-net.umbdev.intainabs.com
+      org_status: new
+      cli: enabled
+      ca_data:
+        url: ca.trustee-net:7054
+        certificate: file/server.crt
+      
+      cloud_provider: azure   # Options: aws, azure, gcp, minikube
+      aws:
+        access_key: "aws_access_key"        # AWS Access key, only used when cloud_provider=aws
+        secret_key: "aws_secret_key"        # AWS Secret key, only used when cloud_provider=aws
+  
+      # Kubernetes cluster deployment variables. The config file path and name has to be provided in case
+      # the cluster has already been created.
+      k8s:
+        region: "West US 2"
+        context: "umb-staging-cni"
+        config_file: "/home/blockchain-automation-framework/build/config"
+
+      # Hashicorp Vault server address and root-token. Vault should be unsealed.
+      # Do not check-in root_token
+      vault:
+        url: "http://umb-vault.westus2.cloudapp.azure.com:8200"
+        root_token: "s.GKqdVOujk3sv2tN12UUCUmy1"
+      # Git Repo details which will be used by GitOps/Flux.
+      # Do not check-in git_access_token
+      gitops:
+        git_ssh: "git@github.com:sivaramkannan/baf-intain-fork.git"         # Gitops ssh url for flux value files 
+        branch: "umb-staging-cni"           # Git branch where release is being made
+        release_dir: "platforms/hyperledger-fabric/releases/umb-staging-cni" # Relative Path in the Git repo for flux sync per environment. 
+        chart_source: "platforms/hyperledger-fabric/charts"     # Relative Path where the Helm charts are stored in Git repo
+        git_push_url: "github.com/sivaramkannan/baf-intain-fork.git"   # Gitops https URL for git push  (without https://)
+        username: "sivaramkannan"          # Git Service user who has rights to check-in in all branches
+        password: "ea8e98364360d504d7e78f8be06bf2b4c1955eb2"          # Git Server user password
+        email: "sivaram.kannan@intainft.com"                # Email to use in git config
+        private_key: "/home/blockchain-automation-framework/build/gitops"          # Path to private key file which has write-access to the git repo
+
+      services:
+        ca:
+          name: ca
+          subject: "/C=GB/ST=London/L=London/O=Trustee/CN=ca.trustee-net"
+          type: ca
+          grpc:
+            port: 7054
+        peers:
+        - peer:
+          name: peer0          
+          type: anchor    # This can be anchor/nonanchor. Atleast one peer should be anchor peer.    
+          gossippeeraddress: peer0.trustee-net:7051 # Internal Address of the other peer in same Org for gossip, same peer if there is only one peer          
+          peerAddress: peer0.trustee-net:7051
+          cli: enabled
+          grpc:
+            port: 7051         
+          events:
+            port: 7053
+          couchdb:
+            port: 5984
+          restserver:
+            targetPort: 20001
+            port: 20001 
+          expressapi:
+            targetPort: 3000
+            port: 3000
+          chaincode:
+            name: "fabcar" #This has to be replaced with the name of the chaincode
+            version: "1" #This has to be replaced with the version of the chaincode
+            maindirectory: "fabric-sample/chaincode"  #The main directory where chaincode is needed to be placed
+            lang: "golang"  # The language in which the chaincode is written ( golang/java/node )
+            repository:
+              username: "sivaramsk"          # Git Service user who has rights to check-in in all branches
+              password: "53c9765ad883b0ab50ff7ca16f8b877597581de6"
+              url: "git@github.com:sivaramsk/fabric-samples.git"
+              branch: develop
+              path: "fabcar/go/"   #The path to the chaincode 
+            arguments: '{Make: "Toyota", Model: "Prius", Colour: "blue", Owner: "Tomoko"}' #Arguments to be passed along with the chaincode parameters
+            endorsements: "" #Endorsements (if any) provided along with the chaincode 
+
+    - organization:
+      name: investor
+      country: GB
+      state: London
+      location: London
+      subject: "O=Investor,OU=Investor,L=51.50/-0.13/London,C=GB"
+      type: peer
+      external_url_suffix: investor-net.umbdev.intainabs.com
+      org_status: new
+      cli: enabled
+      ca_data:
+        url: ca.investor-net:7054
+        certificate: file/server.crt
+      
+      cloud_provider: azure   # Options: aws, azure, gcp, minikube
+      aws:
+        access_key: "aws_access_key"        # AWS Access key, only used when cloud_provider=aws
+        secret_key: "aws_secret_key"        # AWS Secret key, only used when cloud_provider=aws
+  
+      # Kubernetes cluster deployment variables. The config file path and name has to be provided in case
+      # the cluster has already been created.
+      k8s:
+        region: "West US 2"
+        context: "umb-staging-cni"
+        config_file: "/home/blockchain-automation-framework/build/config"
+
+      # Hashicorp Vault server address and root-token. Vault should be unsealed.
+      # Do not check-in root_token
+      vault:
+        url: "http://umb-vault.westus2.cloudapp.azure.com:8200"
+        root_token: "s.GKqdVOujk3sv2tN12UUCUmy1"
+      # Git Repo details which will be used by GitOps/Flux.
+      # Do not check-in git_access_token
+      gitops:
+        git_ssh: "git@github.com:sivaramkannan/baf-intain-fork.git"         # Gitops ssh url for flux value files 
+        branch: "umb-staging-cni"           # Git branch where release is being made
+        release_dir: "platforms/hyperledger-fabric/releases/umb-staging-cni" # Relative Path in the Git repo for flux sync per environment. 
+        chart_source: "platforms/hyperledger-fabric/charts"     # Relative Path where the Helm charts are stored in Git repo
+        git_push_url: "github.com/sivaramkannan/baf-intain-fork.git"   # Gitops https URL for git push  (without https://)
+        username: "sivaramkannan"          # Git Service user who has rights to check-in in all branches
+        password: "ea8e98364360d504d7e78f8be06bf2b4c1955eb2"          # Git Server user password
+        email: "sivaram.kannan@intainft.com"                # Email to use in git config
+        private_key: "/home/blockchain-automation-framework/build/gitops"          # Path to private key file which has write-access to the git repo
+
+      services:
+        ca:
+          name: ca
+          subject: "/C=GB/ST=London/L=London/O=Investor/CN=ca.investor-net"
+          type: ca
+          grpc:
+            port: 7054
+        peers:
+        - peer:
+          name: peer0          
+          type: anchor    # This can be anchor/nonanchor. Atleast one peer should be anchor peer.    
+          gossippeeraddress: peer0.investor-net:7051 # Internal Address of the other peer in same Org for gossip, same peer if there is only one peer          
+          peerAddress: peer0.investor-net:7051
+          cli: enabled
+          grpc:
+            port: 7051         
+          events:
+            port: 7053
+          couchdb:
+            port: 5984
+          restserver:
+            targetPort: 20001
+            port: 20001 
+          expressapi:
+            targetPort: 3000
+            port: 3000
+          chaincode:
+            name: "fabcar" #This has to be replaced with the name of the chaincode
+            version: "1" #This has to be replaced with the version of the chaincode
+            maindirectory: "fabric-sample/chaincode"  #The main directory where chaincode is needed to be placed
+            lang: "golang"  # The language in which the chaincode is written ( golang/java/node )
+            repository:
+              username: "sivaramsk"          # Git Service user who has rights to check-in in all branches
+              password: "53c9765ad883b0ab50ff7ca16f8b877597581de6"
+              url: "git@github.com:sivaramsk/fabric-samples.git"
+              branch: develop
+              path: "fabcar/go/"   #The path to the chaincode 
+            arguments: '{Make: "Toyota", Model: "Prius", Colour: "blue", Owner: "Tomoko"}' #Arguments to be passed along with the chaincode parameters
+            endorsements: "" #Endorsements (if any) provided along with the chaincode 
+ 
+    - organization:
+      name: servicer
+      country: US
+      state: New York
+      location: New York
+      subject: "O=Servicer,OU=Servicer,L=40.73/-74/New York,C=US"
+      type: peer
+      external_url_suffix: servicer-net.umbdev.intainabs.com
+      org_status: new
+      cli: enabled
+      ca_data:
+        url: ca.servicer-net:7054
+        certificate: file/server.crt
+      
+      cloud_provider: azure   # Options: aws, azure, gcp, minikube
+      aws:
+        access_key: "aws_access_key"        # AWS Access key, only used when cloud_provider=aws
+        secret_key: "aws_secret_key"        # AWS Secret key, only used when cloud_provider=aws
+  
+      # Kubernetes cluster deployment variables. The config file path and name has to be provided in case
+      # the cluster has already been created.
+      k8s:
+        region: "West US 2"
+        context: "umb-staging-cni"
+        config_file: "/home/blockchain-automation-framework/build/config"
+
+      # Hashicorp Vault server address and root-token. Vault should be unsealed.
+      # Do not check-in root_token
+      vault:
+        url: "http://umb-vault.westus2.cloudapp.azure.com:8200"
+        root_token: "s.GKqdVOujk3sv2tN12UUCUmy1"
+      # Git Repo details which will be used by GitOps/Flux.
+      # Do not check-in git_access_token
+      gitops:
+        git_ssh: "git@github.com:sivaramkannan/baf-intain-fork.git"         # Gitops ssh url for flux value files 
+        branch: "umb-staging-cni"           # Git branch where release is being made
+        release_dir: "platforms/hyperledger-fabric/releases/umb-staging-cni" # Relative Path in the Git repo for flux sync per environment. 
+        chart_source: "platforms/hyperledger-fabric/charts"     # Relative Path where the Helm charts are stored in Git repo
+        git_push_url: "github.com/sivaramkannan/baf-intain-fork.git"   # Gitops https URL for git push  (without https://)
+        username: "sivaramkannan"          # Git Service user who has rights to check-in in all branches
+        password: "ea8e98364360d504d7e78f8be06bf2b4c1955eb2"          # Git Server user password
+        email: "sivaram.kannan@intainft.com"                # Email to use in git config
+        private_key: "/home/blockchain-automation-framework/build/gitops"          # Path to private key file which has write-access to the git repo
+
+
+      #Optional for infrastructure configuration files.
+      infrastructure:
+        target_state: "present"  # Options: present, absent, planned            
+        refresh_inventory: yes  
+
+        
+      services:
+        ca:
+          name: ca
+          subject: "/C=US/ST=New York/L=New York/O=Servicer/CN=ca.servicer-net"
+          type: ca
+          grpc:
+            port: 7054
+        peers:
+        - peer:
+          name: peer0          
+          type: anchor    # This can be anchor/nonanchor. Atleast one peer should be anchor peer. 
+          gossippeeraddress: peer0.servicer-net:7051 # Internal Address of the other peer in same Org for gossip, same peer if there is only one peer          
+          peerAddress: peer0.servicer-net:7051
+          cli: enabled
+          grpc:
+            port: 7051
+          events:
+            port: 7053
+          couchdb:
+            port: 5984
+          restserver:
+            targetPort: 20001
+            port: 20001 
+          expressapi:
+            targetPort: 3000
+            port: 3000
+          chaincode:
+            name: "fabcar" #This has to be replaced with the name of the chaincode
+            version: "1" #This has to be replaced with the version of the chaincode
+            maindirectory: "fabric-sample/chaincode"  #The main directory where chaincode is needed to be placed
+            lang: "golang"  # The language in which the chaincode is written ( golang/java/node )
+            repository:
+              username: "sivaramsk"          # Git Service user who has rights to check-in in all branches
+              password: "53c9765ad883b0ab50ff7ca16f8b877597581de6"
+              url: "git@github.com:sivaramsk/fabric-samples.git"
+              branch: develop
+              path: "fabcar/go/"   #The path to the chaincode 
+            arguments: '{Make: "Toyota", Model: "Prius", Colour: "blue", Owner: "Tomoko"}' #Arguments to be passed along with the chaincode parameters
+            endorsements: "" #Endorsements (if any) provided along with the chaincode  
+
+~~
 
  Once everything is done, run 
 
